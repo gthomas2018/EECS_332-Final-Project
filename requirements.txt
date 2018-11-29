@@ -1,3 +1,7 @@
+appdirs==1.4.3
+attrs==18.2.0
+black==18.9b0
+Click==7.0
 cycler==0.10.0
 kiwisolver==1.0.1
 matplotlib==3.0.2
@@ -6,3 +10,4 @@ opencv-python==3.4.4.19
 pyparsing==2.3.0
 python-dateutil==2.7.5
 six==1.11.0
+toml==0.10.0
