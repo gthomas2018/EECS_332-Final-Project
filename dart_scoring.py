@@ -1,9 +1,7 @@
 import numpy as np
 import cv2 as cv
-import os, os.path
-import itertools
-from shapely.geometry import LineString
-from shapely.geometry import Point
+import random
+import math
 
 
 video = "center"
@@ -23,151 +21,201 @@ def polar_to_cart_line(rho, theta) :
 	return x1, y1, x2, y2
 
 
-def center_intersect(x1, y1, x2, y2, draw_crop):
+def center_intersect(x1, y1, x2, y2, draw_crop) :
 	if float(x1 - x2) == 0:
 		return None
 	m = float(y1 - y2)/float(x1 - x2)
 	b = int(y1 - float(m*x1))
 
-	area_buffer = 25
+	area_buffer = 10
 	center = (draw_crop.shape[1]/2, draw_crop.shape[0]/2)
-	min_y = center[1] - area_buffer
-	max_y = center[1] + area_buffer
-	min_x = center[0] - area_buffer
-	max_x = center[0] + area_buffer
+	min_y = int(center[1] - area_buffer)
+	max_y = int(center[1] + area_buffer)
+	min_x = int(center[0] - area_buffer)
+	max_x = int(center[0] + area_buffer)
 
-	cv.rectangle(draw_crop, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
+	#cv.rectangle(draw_crop, (min_x, min_y), (max_x, max_y), (255, 0, 0), 2)
 
-	y = int(m*(center[0]+100) + b)
+	y = int(m*(center[0]) + b)
 	if m == 0:
 		return None
 	x = int((center[1]-b)/m)
 
 	if y in range(min_y, max_y) or x in range(min_x, max_x):
 		y = int(m*draw_crop.shape[1] + b)
-		
-		line = [0, np.clip(0, b, draw_crop.shape[0]), draw_crop.shape[1], np.clip(0, y, draw_crop.shape[0])]
+		line = [0, b, draw_crop.shape[1], y]
 		return line
 	else:
 		return None
 
 
-def stream() : 
+def sort_lines(lines) :
+	lines = sorted(lines, key=lambda line: line[1], reverse=True)
+	good_lines = []
+
+	for i in range(len(lines)-1):
+		if abs(lines[i][1] - lines[i+1][1]) > 50:
+			good_lines.append(lines[i])
+	if not len(good_lines) == 10:
+		good_lines.append(lines[-1])
+
+	return good_lines
+
+
+def get_score(lines, circles, dart_point) :
+	center = (circles[0][0], circles[0][1])
+	x1 = dart_point[0]
+	y1 = dart_point[1]
+	x2 = center[0]
+	y2 = center[1]
+
+	m = float(y1 - y2)/float(x1 - x2)
+	b = int(y1 - float(m*x1))
+
+	scores = [(1, 19), (18, 7), (4, 16), (13, 8), (6, 11), (14, 10), (9, 15), (12, 2), (5, 17), (20, 3)]
+	score = 0
+
+	for i in range(len(lines)-1):
+		if b <= lines[i][1] and b >= lines[i+1][1]:
+			if i == 4:
+				# horizontal dart_point x val
+				if dart_point[0] >= center[0]:
+					score = scores[i][0]
+				else:
+					score = scores[i][1]
+			else:
+				if dart_point[1] >= center[1]:
+					score = scores[i][1]
+				else:
+					score = scores[i][0]
+			break
+		else:
+			if dart_point[1] >= center[1]:
+				score = scores[-1][1]
+			else:
+				score = scores[-1][0]
+
+	dist = math.sqrt((dart_point[0] - center[0])**2 + (dart_point[1] - center[1])**2)
+
+	if dist > circles[1][2]:
+		score *= 0
+	elif dist <= circles[1][2] and dist > circles[2][2]:
+		score *= 2
+	elif dist <= circles[3][2] and dist > circles[4][2]:
+		score *= 3
+	elif dist <= circles[5][2] and dist > circles[6][2]:
+		score = 25
+	elif dist <= circles[6][2]:
+		score = 50
+
+	return score
+
+
+def main() : 
 	cam = cv.VideoCapture(1)
 	cam.set(3, 1920)
 	cam.set(4, 1080)
 
+	'''
+	GET GOOD BOARD PROPOSAL LINES
+	'''
 	while cam.isOpened():
-		ret, img = cam.read()
+		while True:
+			ret, img = cam.read()
 
-		img = cv.GaussianBlur(img, (5,5), 0)
-		gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+			img = cv.GaussianBlur(img, (5,5), 0)
+			gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
-		'''
-		GET CIRCLES
-		'''
-		circles = cv.HoughCircles(gray, cv.HOUGH_GRADIENT, 1, 200, param1=200, param2=200, minRadius=250, maxRadius=10000)
-		
-		if circles == None:
-			continue
+			'''
+			GET CIRCLES
+			'''
+			circles = cv.HoughCircles(gray, cv.HOUGH_GRADIENT, 1, 200, param1=200, param2=200, minRadius=250, maxRadius=10000)
+			
+			if circles is None:
+				continue
 
-		outer_circle = circles[0][0]
-		outer_circle_rad = int(outer_circle[2])
-		outer_circle_x = int(outer_circle[0])
-		outer_circle_y = int(outer_circle[1])
+			outer_circle = circles[0][0]
+			outer_circle_rad = int(outer_circle[2])
+			outer_circle_x = int(outer_circle[0])
+			outer_circle_y = int(outer_circle[1])
 
-		crop_buffer = 0
-		board_min = (outer_circle_x - outer_circle_rad - crop_buffer, outer_circle_y - outer_circle_rad - crop_buffer)
-		board_max = (outer_circle_x + outer_circle_rad + crop_buffer, outer_circle_y + outer_circle_rad + crop_buffer)
-		board_crop = img[board_min[1] : board_max[1], board_min[0] : board_max[0]]
-		gray_crop = gray[board_min[1] : board_max[1], board_min[0] : board_max[0]]
-		draw_crop = board_crop.copy()
+			crop_buffer = 0
+			board_min = (outer_circle_x - outer_circle_rad - crop_buffer, outer_circle_y - outer_circle_rad - crop_buffer)
+			board_max = (outer_circle_x + outer_circle_rad + crop_buffer, outer_circle_y + outer_circle_rad + crop_buffer)
+			board_crop = img[board_min[1] : board_max[1], board_min[0] : board_max[0]]
+			gray_crop = gray[board_min[1] : board_max[1], board_min[0] : board_max[0]]
+			draw_crop = board_crop.copy()
 
-		outer_circle_x = draw_crop.shape[1]/2
-		outer_circle_y = draw_crop.shape[0]/2
+			outer_circle_x = int(draw_crop.shape[1]/2)
+			outer_circle_y = int(draw_crop.shape[0]/2)
 
-		cv.circle(draw_crop, (outer_circle_x, outer_circle_y), outer_circle_rad - 1, (0,255,0), 1)
+			saved_circles = [[outer_circle_x, outer_circle_y, outer_circle_rad]]
+			cv.circle(draw_crop, (outer_circle_x, outer_circle_y), int(outer_circle_rad), (0,0,255), 2)
 
-		for prop in circle_props:
-			cv.circle(draw_crop, (outer_circle_x, outer_circle_y), int(outer_circle_rad*prop), (0,255,0), 1)
+			for prop in circle_props:
+				saved_circles.append([outer_circle_x, outer_circle_y, int(outer_circle_rad*prop)])
+				cv.circle(draw_crop, (outer_circle_x, outer_circle_y), int(outer_circle_rad*prop), (0,0,255), 2)
 
-		'''
-		GET LINES
-		'''
-		edges_crop = cv.Canny(gray_crop, 65, 130)
+			'''
+			GET LINES
+			'''
+			edges_crop = cv.Canny(gray_crop, 65, 130)
 
-		#CV_HOUGH_MULTI_SCALE = 2
-		#lines = cv.HoughLines(edges_crop, 10, 1.0/180.0, 650)
-		lines = cv.HoughLinesP(edges_crop, rho=10, theta=1.0/180, threshold=400, minLineLength=300, maxLineGap=50)
+			lines = cv.HoughLinesP(edges_crop, rho=10, theta=1.0/180, threshold=100, minLineLength=300, maxLineGap=50)
 
-		if lines == None:
-			cv.imshow('frame', draw_crop)
-			if cv.waitKey(1) & 0xFF == ord('q'):
+			if lines is None:
+				cv.imshow('frame', draw_crop)
+				if cv.waitKey(1) & 0xFF == ord('q'):
+					break
+				continue
+
+			saved_lines = []
+
+			for line in lines:
+				for x1, y1, x2, y2 in line:
+					line = center_intersect(x1, y1, x2, y2, draw_crop)
+					if line != None:
+						saved_lines.append(line)
+
+			saved_lines = sort_lines(saved_lines)
+
+			if len(saved_lines) < 10:
+				continue
+
+			for line in saved_lines:
+				cv.line(draw_crop, (line[0], line[1]), (line[2], line[3]), (0,0,255), 2)
+
+			cv.imshow('board proposal', draw_crop)
+			key = cv.waitKey() & 0xFF
+			if key == ord('y'):
 				break
-			continue
+			elif key == ord('n'):
+				continue
+			elif key == ord('q'):
+				cam.release()
+				cv.destroyAllWindows()
+				return
+		break
 
-		'''for line in lines:
-			for rho, theta in line:
-				x1, y1, x2, y2 = polar_to_cart_line(rho, theta)
-				cv.line(draw_crop, (x1, y1), (x2, y2), (0, 0, 255), 1)
-		'''
-		for line in lines:
-			for x1, y1, x2, y2 in line:
-				line = center_intersect(x1, y1, x2, y2, draw_crop)
-				if line != None:
-					cv.line(draw_crop, (line[0], line[1]), (line[2], line[3]), (0, 0, 255), 3)
+	'''
+	FIND SEGMENTS
+	'''
 
+	while True:
+		new_crop = board_crop.copy()
+		dart_point = (random.randint(0, draw_crop.shape[0]), random.randint(0, draw_crop.shape[1]))
+		score = get_score(saved_lines, saved_circles, dart_point)
 
-		'''
-		GET NUMBERS
-		'''
-
-		'''
-		GET SEGMENTS
-		'''
-
-		cv.imshow('frame', draw_crop)
-		if cv.waitKey(1) & 0xFF == ord('q'):
+		cv.circle(new_crop, (dart_point[0], dart_point[1]), 5, (0,255,0), 2)
+		cv.putText(new_crop, "SCORE: " + str(score), (0, 60), cv.FONT_HERSHEY_SIMPLEX, 2, (255,255,255), 2)
+		cv.imshow('result', new_crop)
+		if cv.waitKey() & 0xFF == ord('q'):
 			break
 
 	cam.release()
 	cv.destroyAllWindows()
-
-
-def grab_folder_imgs() :
-	return sorted(os.listdir("vids/center/"))
-
-
-def main_stream() :
-	stream()
-
-def main_folder() : 
-	img_paths = grab_folder_imgs()
-	
-	for img_path in img_paths:
-		img = cv.imread(os.path.join("vids", video, img_path))
-		img = cv.GaussianBlur(img, (5,5), 0)
-		gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-		#edges = cv.Canny(gray, 100, 200)
-		circles = cv.HoughCircles(gray, cv.HOUGH_GRADIENT, 1, 200, param1=200, param2=200, minRadius=250, maxRadius=10000)
-		
-		if circles == None:
-			cv.imshow('frame', img)
-			if cv.waitKey(1) & 0xFF == ord('q'):
-				break
-			continue
-
-		circle = circles[0][0]
-		max_rad = circle[2]
-		cv.circle(img, (circle[0], circle[1]), circle[2], (0,255,0), 2)
-
-		for prop in circle_props:
-			cv.circle(img, (circle[0], circle[1]), int(max_rad*prop), (0,255,0), 2)
-
-		cv.imshow('frame', img)
-		if cv.waitKey(1) & 0xFF == ord('q'):
-			break
         
 
+
 if __name__ == '__main__':
-    main_stream()
+    main()
