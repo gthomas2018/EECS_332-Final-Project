@@ -331,7 +331,7 @@ def main() :
 		cv.imshow('result', board_crop)
 		if cv.waitKey(1) & 0xFF == ord('q'):
 			break
-		cv.imwrite("demos/" + str(cnt) + ".jpg", board_crop)
+		cv.imwrite("demo2/" + str(cnt).zfill(4) + ".jpg", board_crop)
 		cnt += 1
 
 	cam.release()
