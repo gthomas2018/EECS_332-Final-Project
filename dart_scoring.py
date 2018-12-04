@@ -186,6 +186,8 @@ def find_dart(board_crop) :
 	params.minThreshold = 0
 	params.maxThreshold = 256
 
+	params.minDistBetweenBlobs = 20
+
 	params.filterByColor = False
 	#params.blobColor = 255
 
@@ -331,7 +333,7 @@ def main() :
 		cv.imshow('result', board_crop)
 		if cv.waitKey(1) & 0xFF == ord('q'):
 			break
-		cv.imwrite("demo2/" + str(cnt).zfill(4) + ".jpg", board_crop)
+		cv.imwrite("demo4/" + str(cnt).zfill(4) + ".jpg", board_crop)
 		cnt += 1
 
 	cam.release()
