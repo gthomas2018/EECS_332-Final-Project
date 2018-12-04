@@ -111,6 +111,111 @@ def get_score(lines, circles, dart_point) :
 	return score
 
 
+def find_hsv_settings() :
+	cam = cv.VideoCapture(1)
+	cam.set(3, 1280)
+	cam.set(4, 720)
+
+	def nothing(x):
+		pass
+
+	cv.namedWindow('image')
+	cv.createTrackbar("Hue_lower", 'image', 0, 180, nothing)
+	cv.createTrackbar("Hue_upper", 'image', 0, 180, nothing)
+	cv.createTrackbar("Sat_lower", 'image', 0, 255, nothing)
+	cv.createTrackbar("Sat_upper", 'image', 0, 255, nothing)
+	cv.createTrackbar("Val_lower", 'image', 0, 255, nothing)
+	cv.createTrackbar("Val_upper", 'image', 0, 255, nothing)
+
+	while cam.isOpened():
+		ret, img = cam.read()
+		img = cv.GaussianBlur(img, (5,5), 0)
+
+		HSV_img = cv.cvtColor(img, cv.COLOR_BGR2HSV)
+
+		H_thresh_lower = cv.getTrackbarPos("Hue_lower", 'image')
+		H_thresh_upper = cv.getTrackbarPos("Hue_upper", 'image')
+		S_thresh_lower = cv.getTrackbarPos("Sat_lower", 'image')
+		S_thresh_upper = cv.getTrackbarPos("Sat_upper", 'image')
+		V_thresh_lower = cv.getTrackbarPos("Val_lower", 'image')
+		V_thresh_upper = cv.getTrackbarPos("Val_upper", 'image')
+
+		min_hsv = (H_thresh_lower, S_thresh_lower, V_thresh_lower)
+		max_hsv = (H_thresh_upper, S_thresh_upper, V_thresh_upper)
+
+		mask = cv.inRange(HSV_img, min_hsv, max_hsv)
+
+		cv.imshow('image', mask)
+		if cv.waitKey(1) & 0xFF == ord('q'):
+			break
+
+	cam.release()
+	cv.destroyAllWindows()
+
+
+def find_dart(board_crop) :
+	# PINK
+	Hue_min = 160
+	Hue_max = 180
+	Sat_min = 99
+	Sat_max = 200
+	Val_min = 134
+	Val_max = 255
+
+	# Blue
+	'''Hue_min = 92
+	Hue_max = 111
+	Sat_min = 77
+	Sat_max = 125
+	Val_min = 90
+	Val_max = 163'''
+
+	min_hsv = (Hue_min, Sat_min, Val_min)
+	max_hsv = (Hue_max, Sat_max, Val_max)
+
+	HSV_crop = cv.cvtColor(board_crop, cv.COLOR_BGR2HSV)
+
+	mask = cv.inRange(HSV_crop, min_hsv, max_hsv)
+
+	kernel = np.ones((5,5), np.uint8)
+	mask = cv.erode(mask, kernel, iterations=1)
+	mask = cv.dilate(mask, kernel, iterations=2)
+
+	params = cv.SimpleBlobDetector_Params()
+
+	params.minThreshold = 0
+	params.maxThreshold = 256
+
+	params.filterByColor = False
+	#params.blobColor = 255
+
+	params.filterByArea = False
+	#params.minArea = 1
+
+	params.filterByCircularity = False
+	#params.minCircularity = 0.5
+
+	params.filterByConvexity = False
+	#params.minConvexity = 0.6
+
+	params.filterByInertia = False
+	#params.minInertiaRatio = 0.8
+
+	detector = cv.SimpleBlobDetector_create(params)
+
+	mask = mask
+	points = detector.detect(mask)
+
+	if not points:
+		return None
+	else:
+		clean_points = []
+
+		for point in points:
+			clean_points.append((int(point.pt[0]), int(point.pt[1])))
+		return clean_points
+
+
 def main() : 
 	cam = cv.VideoCapture(1)
 	cam.set(3, 1920)
@@ -139,9 +244,8 @@ def main() :
 			outer_circle_x = int(outer_circle[0])
 			outer_circle_y = int(outer_circle[1])
 
-			crop_buffer = 0
-			board_min = (outer_circle_x - outer_circle_rad - crop_buffer, outer_circle_y - outer_circle_rad - crop_buffer)
-			board_max = (outer_circle_x + outer_circle_rad + crop_buffer, outer_circle_y + outer_circle_rad + crop_buffer)
+			board_min = (outer_circle_x - outer_circle_rad, outer_circle_y - outer_circle_rad)
+			board_max = (outer_circle_x + outer_circle_rad, outer_circle_y + outer_circle_rad)
 			board_crop = img[board_min[1] : board_max[1], board_min[0] : board_max[0]]
 			gray_crop = gray[board_min[1] : board_max[1], board_min[0] : board_max[0]]
 			draw_crop = board_crop.copy()
@@ -198,19 +302,37 @@ def main() :
 		break
 
 	'''
-	FIND SEGMENTS
+	GET SCORE LOOP
 	'''
-
+	cnt = 0
 	while True:
-		new_crop = board_crop.copy()
-		dart_point = (random.randint(0, draw_crop.shape[0]), random.randint(0, draw_crop.shape[1]))
-		score = get_score(saved_lines, saved_circles, dart_point)
+		ret, img = cam.read()
 
-		cv.circle(new_crop, (dart_point[0], dart_point[1]), 5, (0,255,0), 2)
-		cv.putText(new_crop, "SCORE: " + str(score), (0, 60), cv.FONT_HERSHEY_SIMPLEX, 2, (255,255,255), 2)
-		cv.imshow('result', new_crop)
-		if cv.waitKey() & 0xFF == ord('q'):
+		img = cv.GaussianBlur(img, (5,5), 0)
+
+		board_crop = img[board_min[1] : board_max[1], board_min[0] : board_max[0]]
+		
+		dart_points = find_dart(board_crop)
+
+		if dart_points == None:
+			cv.imshow('result', board_crop)
+			if cv.waitKey(1) & 0xFF == ord('q'):
+				break
+			continue
+
+		score = 0
+
+		for dart_point in dart_points:
+			score += get_score(saved_lines, saved_circles, dart_point)
+			cv.circle(board_crop, (dart_point[0], dart_point[1]), 5, (0,255,0), 2)
+
+		cv.putText(board_crop, "SCORE: " + str(score), (0, 60), cv.FONT_HERSHEY_SIMPLEX, 2, (255,255,255), 2)
+		
+		cv.imshow('result', board_crop)
+		if cv.waitKey(1) & 0xFF == ord('q'):
 			break
+		cv.imwrite("demos/" + str(cnt) + ".jpg", board_crop)
+		cnt += 1
 
 	cam.release()
 	cv.destroyAllWindows()
@@ -218,4 +340,5 @@ def main() :
 
 
 if __name__ == '__main__':
+	#find_hsv_settings()
     main()
